@@ -31,15 +31,26 @@ public class CrossModalJavaFxDemo extends Application {
 
 	@Override
 	public void start(Stage stage) {
-		CrossModalSpec.Spec spec = buildSpec();
-		this.params = CrossModalMapper.map(spec);
+//		CrossModalSpec.Spec spec = buildSpec();
+//		this.params = CrossModalMapper.map(spec);
+//
+//		try {
+//			this.solutions = FloorplanCrossModalSolver.layout(params);
+//		} catch (RuntimeException e) {
+//			throw e; // zeige Solver-Status statt generischem Fallback
+//		}
+	     CrossModalSpec.Spec spec = buildSpec();
+         this.params = CrossModalMapper.map(spec);
 
-		try {
-			this.solutions = FloorplanCrossModalSolver.layout(params);
-		} catch (RuntimeException e) {
-			throw e; // zeige Solver-Status statt generischem Fallback
-		}
-
+         try {
+                 if (params.solver == CrossModalSpec.ModelOptions.Solver.MIQP) {
+                         this.solutions = MIQPFloorplanSolver.layout(params);
+                 } else {
+                         this.solutions = FloorplanCrossModalSolver.layout(params);
+                 }
+         } catch (RuntimeException e) {
+                 throw e; // zeige Solver-Status statt generischem Fallback
+         }
 		if (solutions.isEmpty())
 			throw new IllegalStateException("Keine Lösung gefunden.");
 

@@ -9,7 +9,8 @@
 		<maven.compiler.target>22</maven.compiler.target>
 		<javafx.version>24.0.1</javafx.version>
 	</properties>
- <dependencies>
+	
+<dependencies>
  <dependency>
   <groupId>com.google.ortools</groupId>
   <artifactId>ortools-java</artifactId>
@@ -27,11 +28,19 @@
 			<artifactId>javafx-fxml</artifactId>
 			<version>${javafx.version}</version>
 		</dependency>
-		<dependency>
-			<groupId>org.openjfx</groupId>
-			<artifactId>javafx-graphics</artifactId>
-			<version>${javafx.version}</version>
-		</dependency>
+		 <dependency>
+                        <groupId>org.openjfx</groupId>
+                        <artifactId>javafx-graphics</artifactId>
+                        <version>${javafx.version}</version>
+                </dependency>
+		<!-- MIQP Solver: ojAlgo (frei verfügbar) -->
+                <dependency>
+                        <groupId>org.ojalgo</groupId>
+                        <artifactId>ojalgo</artifactId>
+                        <version>55.0.0</version>
+                </dependency>
+		
+		
  </dependencies>
   <build>
     <sourceDirectory>src</sourceDirectory>
