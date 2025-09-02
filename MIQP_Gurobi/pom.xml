@@ -9,7 +9,10 @@
 		<maven.compiler.target>22</maven.compiler.target>
 		<javafx.version>24.0.1</javafx.version>
 	</properties>
+<<<<<<< HEAD
 	
+=======
+>>>>>>> branch 'master' of https://github.com/Ahmad1992Alm/GrundrissErstellung.git
 <dependencies>
  <dependency>
   <groupId>com.google.ortools</groupId>
@@ -28,6 +31,7 @@
 			<artifactId>javafx-fxml</artifactId>
 			<version>${javafx.version}</version>
 		</dependency>
+<<<<<<< HEAD
 		 <dependency>
                         <groupId>org.openjfx</groupId>
                         <artifactId>javafx-graphics</artifactId>
@@ -42,6 +46,20 @@
 		
 		
  </dependencies>
+=======
+                <dependency>
+                        <groupId>org.openjfx</groupId>
+                        <artifactId>javafx-graphics</artifactId>
+                        <version>${javafx.version}</version>
+                </dependency>
+                <!-- MIQP Solver: ojAlgo (frei verfügbar) -->
+                <dependency>
+                        <groupId>org.ojalgo</groupId>
+                        <artifactId>ojalgo</artifactId>
+                        <version>54.3.1</version>
+                </dependency>
+</dependencies>
+>>>>>>> branch 'master' of https://github.com/Ahmad1992Alm/GrundrissErstellung.git
   <build>
     <sourceDirectory>src</sourceDirectory>
     <plugins>
