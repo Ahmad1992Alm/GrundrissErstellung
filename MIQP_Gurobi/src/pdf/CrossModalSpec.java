@@ -122,19 +122,27 @@ public final class CrossModalSpec {
 		}
 	}
 
-	// --- ModelOptions ---------------------------------------------------------
-	public static final class ModelOptions {
-		public int minDimCells = 1;
-		public int maxDimCells = 10;
-		public boolean enforceAreas = true;
-		public int areaTolCells = 1;
-		public double minAspect = 0.2;
-		public double maxAspect = 5.0;
-		public int minContactCells = 1;
-		public boolean forbidUnwantedContacts = true; // Nicht-Nachbarn dürfen sich nicht berühren
-		public boolean forceFillHull = true; // maxX==W && maxY==H
-		public boolean adjAtLeastOneSide = true; // statt "genau 1 Seite"
-	}
+        // --- ModelOptions ---------------------------------------------------------
+        public static final class ModelOptions {
+                /** Auswahl des zugrunde liegenden Solvers. */
+                public enum Solver {
+                        CP_SAT, MIQP
+                }
+
+                /** Welcher Solver soll verwendet werden? */
+                public Solver solver = Solver.CP_SAT;
+
+                public int minDimCells = 1;
+                public int maxDimCells = 10;
+                public boolean enforceAreas = true;
+                public int areaTolCells = 1;
+                public double minAspect = 0.2;
+                public double maxAspect = 5.0;
+                public int minContactCells = 1;
+                public boolean forbidUnwantedContacts = true; // Nicht-Nachbarn dürfen sich nicht berühren
+                public boolean forceFillHull = true; // maxX==W && maxY==H
+                public boolean adjAtLeastOneSide = true; // statt "genau 1 Seite"
+        }
 
 	// --- Spec -----------------------------------------------------------------
 	public static final class Spec {
