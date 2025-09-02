@@ -56,29 +56,32 @@ public final class CrossModalMapper {
 	}
 
 	// ---- MappedParams: alles, was der Solver braucht -------------------------
-	public static final class MappedParams {
-		public final int hullWCells, hullHCells, borderCells;
-		public final double cellMeters;
-		public final int minDim, maxDim;
-		public final boolean enforceAreas;
-		public final int areaTolCells;
-		public final double minAspect, maxAspect;
-		public final int minContactCells;
-		public final boolean forbidUnwantedContacts;
-		public final boolean forceFillHull;
-		public final boolean adjAtLeastOneSide;
-		public final Map<String, Integer> areaSqmByRoom;
-		public final Map<String, RoomLocalOptions> perRoomOptions;
-		public final AdjacencyGraph G;
+        public static final class MappedParams {
+                public final CrossModalSpec.ModelOptions.Solver solver;
+                public final int hullWCells, hullHCells, borderCells;
+                public final double cellMeters;
+                public final int minDim, maxDim;
+                public final boolean enforceAreas;
+                public final int areaTolCells;
+                public final double minAspect, maxAspect;
+                public final int minContactCells;
+                public final boolean forbidUnwantedContacts;
+                public final boolean forceFillHull;
+                public final boolean adjAtLeastOneSide;
+                public final Map<String, Integer> areaSqmByRoom;
+                public final Map<String, RoomLocalOptions> perRoomOptions;
+                public final AdjacencyGraph G;
 
-		MappedParams(int w, int h, int border, double cell, int minDim, int maxDim, boolean enforceAreas, int areaTol,
-				double minAsp, double maxAsp, int minContact, boolean forbid, boolean forceFill, boolean adjAtLeast,
-				Map<String, Integer> areaMap, Map<String, RoomLocalOptions> roomOpts, AdjacencyGraph g) {
-			this.hullWCells = w;
-			this.hullHCells = h;
-			this.borderCells = border;
-			this.cellMeters = cell;
-			this.minDim = minDim;
+                MappedParams(CrossModalSpec.ModelOptions.Solver solver, int w, int h, int border, double cell,
+                                int minDim, int maxDim, boolean enforceAreas, int areaTol, double minAsp, double maxAsp,
+                                int minContact, boolean forbid, boolean forceFill, boolean adjAtLeast,
+                                Map<String, Integer> areaMap, Map<String, RoomLocalOptions> roomOpts, AdjacencyGraph g) {
+                        this.solver = solver;
+                        this.hullWCells = w;
+                        this.hullHCells = h;
+                        this.borderCells = border;
+                        this.cellMeters = cell;
+                        this.minDim = minDim;
 			this.maxDim = maxDim;
 			this.enforceAreas = enforceAreas;
 			this.areaTolCells = areaTol;
@@ -121,9 +124,9 @@ public final class CrossModalMapper {
 				G.addUndirectedEdge(e.u, e.v);
 		}
 
-		return new MappedParams(W, H, b.borderCells, b.cellMeters, o.minDimCells, o.maxDimCells, o.enforceAreas,
-				o.areaTolCells, o.minAspect, o.maxAspect, o.minContactCells, o.forbidUnwantedContacts, o.forceFillHull,
-				o.adjAtLeastOneSide, areaMap, perRoom, G);
-	}
+                return new MappedParams(o.solver, W, H, b.borderCells, b.cellMeters, o.minDimCells, o.maxDimCells,
+                                o.enforceAreas, o.areaTolCells, o.minAspect, o.maxAspect, o.minContactCells,
+                                o.forbidUnwantedContacts, o.forceFillHull, o.adjAtLeastOneSide, areaMap, perRoom, G);
+        }
 
 }
