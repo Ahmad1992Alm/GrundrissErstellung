@@ -31,7 +31,6 @@ public class CrossModalJavaFxDemo extends Application {
 
 	@Override
 	public void start(Stage stage) {
-<<<<<<< HEAD
 //		CrossModalSpec.Spec spec = buildSpec();
 //		this.params = CrossModalMapper.map(spec);
 //
@@ -40,35 +39,29 @@ public class CrossModalJavaFxDemo extends Application {
 //		} catch (RuntimeException e) {
 //			throw e; // zeige Solver-Status statt generischem Fallback
 //		}
-	     CrossModalSpec.Spec spec = buildSpec();
-         this.params = CrossModalMapper.map(spec);
-=======
-                CrossModalSpec.Spec spec = buildSpec();
-                this.params = CrossModalMapper.map(spec);
->>>>>>> branch 'master' of https://github.com/Ahmad1992Alm/GrundrissErstellung.git
+		CrossModalSpec.Spec spec = buildSpec();
+		this.params = CrossModalMapper.map(spec);
+		this.params = CrossModalMapper.map(spec);
 
-<<<<<<< HEAD
-         try {
-                 if (params.solver == CrossModalSpec.ModelOptions.Solver.MIQP) {
-                         this.solutions = MIQPFloorplanSolver.layout(params);
-                 } else {
-                         this.solutions = FloorplanCrossModalSolver.layout(params);
-                 }
-         } catch (RuntimeException e) {
-                 throw e; // zeige Solver-Status statt generischem Fallback
-         }
-=======
-                try {
-                        if (params.solver == CrossModalSpec.ModelOptions.Solver.MIQP) {
-                                this.solutions = MIQPFloorplanSolver.layout(params);
-                        } else {
-                                this.solutions = FloorplanCrossModalSolver.layout(params);
-                        }
-                } catch (RuntimeException e) {
-                        throw e; // zeige Solver-Status statt generischem Fallback
-                }
+		try {
+			if (params.solver == CrossModalSpec.ModelOptions.Solver.MIQP) {
+				this.solutions = MIQPFloorplanSolver.layout(params);
+			} else {
+				this.solutions = FloorplanCrossModalSolver.layout(params);
+			}
+		} catch (RuntimeException e) {
+			throw e; // zeige Solver-Status statt generischem Fallback
+		}
+		try {
+			if (params.solver == CrossModalSpec.ModelOptions.Solver.MIQP) {
+				this.solutions = MIQPFloorplanSolver.layout(params);
+			} else {
+				this.solutions = FloorplanCrossModalSolver.layout(params);
+			}
+		} catch (RuntimeException e) {
+			throw e; // zeige Solver-Status statt generischem Fallback
+		}
 
->>>>>>> branch 'master' of https://github.com/Ahmad1992Alm/GrundrissErstellung.git
 		if (solutions.isEmpty())
 			throw new IllegalStateException("Keine Lösung gefunden.");
 
@@ -256,13 +249,13 @@ public class CrossModalJavaFxDemo extends Application {
 		spec.addEdge(new CrossModalSpec.Edge("F", "C"));
 		spec.addEdge(new CrossModalSpec.Edge("F", "D"));
 
-                // Lockeres Default-Setup, um Feasibility zu erhöhen
-                spec.options.forbidUnwantedContacts = true; // Nicht-Nachbarn dürfen nicht berühren
-                spec.options.forceFillHull = false; // Hülle nicht erzwingen (später aktivieren)
-                spec.options.adjAtLeastOneSide = true; // "mind. 1 Seite" statt "genau 1"
-                spec.options.areaTolCells = 0; // Toleranz etwas großzügiger
-                spec.options.solver = CrossModalSpec.ModelOptions.Solver.MIQP; // neuen MIQP-Solver verwenden
+		// Lockeres Default-Setup, um Feasibility zu erhöhen
+		spec.options.forbidUnwantedContacts = true; // Nicht-Nachbarn dürfen nicht berühren
+		spec.options.forceFillHull = false; // Hülle nicht erzwingen (später aktivieren)
+		spec.options.adjAtLeastOneSide = true; // "mind. 1 Seite" statt "genau 1"
+		spec.options.areaTolCells = 0; // Toleranz etwas großzügiger
+		spec.options.solver = CrossModalSpec.ModelOptions.Solver.MIQP; // neuen MIQP-Solver verwenden
 
-                return spec;
-        }
+		return spec;
+	}
 }

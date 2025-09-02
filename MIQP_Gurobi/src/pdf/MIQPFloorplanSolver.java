@@ -3,9 +3,8 @@ package pdf;
 import java.util.*;
 import org.ojalgo.optimisation.ExpressionsBasedModel;
 import org.ojalgo.optimisation.Optimisation;
-import org.ojalgo.optimisation.expression.Expression;
-import org.ojalgo.optimisation.variable.Variable;
-
+import org.ojalgo.optimisation.Expression;
+import org.ojalgo.optimisation.Variable;
 /**
  * Einfache MIQP-Variante des Grundriss-Solvers. Verwendet das freie
  * ojAlgo-Optimierungspaket und modelliert jeden Raum als Rechteck mit
@@ -144,7 +143,7 @@ public final class MIQPFloorplanSolver {
             model.addExpression("maxY_" + i).lower(0).set(maxY, 1).set(y[i], -1).set(h[i], -1);
         }
 
-        Expression obj = model.addExpression("OBJ").weight(1.0);
+        org.ojalgo.optimisation.Expression obj = model.addExpression("OBJ").weight(1.0);
         obj.set(maxX, maxX);
         obj.set(maxY, maxY);
         for (int i = 0; i < n; i++) {
