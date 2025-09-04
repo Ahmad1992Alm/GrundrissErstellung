@@ -733,309 +733,747 @@ import com.google.ortools.sat.*;
 import java.util.*;
 
 /**
- * CP-SAT Floorplan-Solver mit Google OR-Tools.
- * Rechteckige Räume (x,y,w,h) im Raster, harte Flächenvorgaben via Allowed-Tuples.
- * - Nicht-Überlappung reifiziert (ohne Big-M)
- * - Nachbarn: bündige Adjazenz (L/R/T/B) + Mindestkontakt
- * - Nicht-Nachbarn: keine gemeinsame Kante (optional per forbidUnwantedContacts), Ecken erlaubt
- * - Ziel: gewichtete Summe ->  (W_PRIMARY)*(maxX+maxY) + (W_SQUARE)*sum|w-h| für ausgewählte Räume
+ * CP-SAT Floorplan-Solver mit Google OR-Tools. Rechteckige Räume (x,y,w,h) im
+ * Raster, harte Flächenvorgaben via Allowed-Tuples. - Nicht-Überlappung
+ * reifiziert (ohne Big-M) - Nachbarn: bündige Adjazenz (L/R/T/B) +
+ * Mindestkontakt - Nicht-Nachbarn: keine gemeinsame Kante (optional per
+ * forbidUnwantedContacts), Ecken erlaubt - Ziel: gewichtete Summe ->
+ * (W_PRIMARY)*(maxX+maxY) + (W_SQUARE)*sum|w-h| für ausgewählte Räume
  */
 public final class FloorplanCrossModalSolver {
 
-    /** Einzelnes (ggf. L-förmig darstellbares) Raumstück – hier als Rechteck. */
-    public static final class RoomPieces {
-        public int x0, y0;     // linke obere Ecke (Rasterzellen)
-        public int wH, hV;     // Breite/Höhe der Bounding-Box
-        public int tX, tY;     // für L-Form (hier = w/h)
-        public int wBB, hBB;   // Bounding-Box (hier = w/h)
-    }
+	/** Einzelnes (ggf. L-förmig darstellbares) Raumstück – hier als Rechteck. */
+	public static final class RoomPieces {
+		public int x0, y0; // linke obere Ecke (Rasterzellen)
+		public int wH, hV; // Breite/Höhe der Bounding-Box
+		public int tX, tY; // für L-Form (hier = w/h)
+		public int wBB, hBB; // Bounding-Box (hier = w/h)
+	}
 
-    /** komplette Lösung: maxX/maxY und Zuordnung Raum->Pieces */
-    public static final class Solution {
-        public int maxX, maxY;
-        public final Map<String, RoomPieces> piecesByNode = new LinkedHashMap<>();
-    }
+	/** komplette Lösung: maxX/maxY und Zuordnung Raum->Pieces */
+	public static final class Solution {
+		public int maxX, maxY;
+		public final Map<String, RoomPieces> piecesByNode = new LinkedHashMap<>();
+	}
 
-    private FloorplanCrossModalSolver() {}
+	private FloorplanCrossModalSolver() {
+	}
 
-    public static List<Solution> layout(CrossModalMapper.MappedParams p) {
-        Loader.loadNativeLibraries();
+	public static List<Solution> layout(CrossModalMapper.MappedParams p) {
+		Loader.loadNativeLibraries();
 
-        // ---- Eingabeprüfung ----
-        var G = p.G;
-        int n = G.nodes.size();
-        if (n == 0) throw new IllegalArgumentException("Graph hat keine Knoten");
-        if (p.minDim > p.maxDim) throw new IllegalArgumentException("minDim > maxDim");
-        if (p.hullWCells <= 0 || p.hullHCells <= 0) throw new IllegalArgumentException("Ungültige Bounding-Box");
+		// ---- Eingabeprüfung ----
+		var G = p.G;
+		int n = G.nodes.size();
+		if (n == 0)
+			throw new IllegalArgumentException("Graph hat keine Knoten");
+		if (p.minDim > p.maxDim)
+			throw new IllegalArgumentException("minDim > maxDim");
+		if (p.hullWCells <= 0 || p.hullHCells <= 0)
+			throw new IllegalArgumentException("Ungültige Bounding-Box");
 
-        final int border = Math.max(0, p.borderCells);
-        final int hullW = p.hullWCells;
-        final int hullH = p.hullHCells;
-        final int hullWUse = Math.max(0, hullW - 2 * border);
-        final int hullHUse = Math.max(0, hullH - 2 * border);
-        if (hullWUse <= 0 || hullHUse <= 0) {
-            throw new IllegalArgumentException("Nutzbare Hülle ≤ 0 (borderCells zu groß?)");
-        }
+		final int border = Math.max(0, p.borderCells);
+		final int hullW = p.hullWCells;
+		final int hullH = p.hullHCells;
+		final int hullWUse = Math.max(0, hullW - 2 * border);
+		final int hullHUse = Math.max(0, hullH - 2 * border);
+		if (hullWUse <= 0 || hullHUse <= 0) {
+			throw new IllegalArgumentException("Nutzbare Hülle ≤ 0 (borderCells zu groß?)");
+		}
 
-        // ---- Quadratik-Präferenz: HIER anpassen, welche Räume „quadratisch“ werden sollen ----
-        final Set<String> preferSquare = new HashSet<>(List.of("A","B")); // z.B. List.of("A","C")
+		// ---- Quadratik-Präferenz: HIER anpassen, welche Räume „quadratisch“ werden
+		// sollen ----
+		final Set<String> preferSquare = new HashSet<>(List.of("A", "B","C","D")); // z.B. List.of("A","C")
 
-        // ---- Gewichte für die Zielfunktion ----
-        final long W_PRIMARY = 10_000L; // groß: Kompaktheit hat Vorrang
-        final long W_SQUARE  = 1L;      // klein: Quadratnähe als Tie-Break
+		// ---- Gewichte für die Zielfunktion ----
+		final long W_PRIMARY = 10_000L; // groß: Kompaktheit hat Vorrang
+		final long W_SQUARE = 1L; // klein: Quadratnähe als Tie-Break
 
-        final CpModel model = new CpModel();
+		final CpModel model = new CpModel();
 
-        // ---- Variablen je Raum ----
-        IntVar[] x = new IntVar[n];
-        IntVar[] y = new IntVar[n];
-        IntVar[] w = new IntVar[n];
-        IntVar[] h = new IntVar[n];
+		// ---- Variablen je Raum ----
+		IntVar[] x = new IntVar[n];
+		IntVar[] y = new IntVar[n];
+		IntVar[] w = new IntVar[n];
+		IntVar[] h = new IntVar[n];
 
-        // |w-h|-Variablen für „quadratische“ Räume
-        List<IntVar> sqDiffs = new ArrayList<>();
+		// |w-h|-Variablen für „quadratische“ Räume
+		List<IntVar> sqDiffs = new ArrayList<>();
 
-        for (int i = 0; i < n; i++) {
-            String id = G.nodes.get(i);
-            var ro = p.perRoomOptions.get(id);
+		for (int i = 0; i < n; i++) {
+			String id = G.nodes.get(i);
+			var ro = p.perRoomOptions.get(id);
 
-            int minDim = ro != null && ro.minDimCells != null ? ro.minDimCells : p.minDim;
-            int maxDim = ro != null && ro.maxDimCells != null ? ro.maxDimCells : p.maxDim;
-            if (minDim > maxDim) throw new IllegalArgumentException("minDim > maxDim für Raum " + id);
+			int minDim = ro != null && ro.minDimCells != null ? ro.minDimCells : p.minDim;
+			int maxDim = ro != null && ro.maxDimCells != null ? ro.maxDimCells : p.maxDim;
+			if (minDim > maxDim)
+				throw new IllegalArgumentException("minDim > maxDim für Raum " + id);
 
-            x[i] = model.newIntVar(border, hullW - border, "x_" + i);
-            y[i] = model.newIntVar(border, hullH - border, "y_" + i);
-            w[i] = model.newIntVar(minDim, maxDim, "w_" + i);
-            h[i] = model.newIntVar(minDim, maxDim, "h_" + i);
+			x[i] = model.newIntVar(border, hullW - border, "x_" + i);
+			y[i] = model.newIntVar(border, hullH - border, "y_" + i);
+			w[i] = model.newIntVar(minDim, maxDim, "w_" + i);
+			h[i] = model.newIntVar(minDim, maxDim, "h_" + i);
 
-            // Innenhülle: x+w ≤ hullW-border, y+h ≤ hullH-border
-            model.addLessOrEqual(LinearExpr.sum(new IntVar[]{x[i], w[i]}), hullW - border);
-            model.addLessOrEqual(LinearExpr.sum(new IntVar[]{y[i], h[i]}), hullH - border);
+			// Innenhülle: x+w ≤ hullW-border, y+h ≤ hullH-border
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), hullW - border);
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), hullH - border);
 
-            // Fläche (optional): Allowed (w,h)-Paare in Zellen mit Aspectfenster/Toleranz
-            Integer areaSqm = p.areaSqmByRoom.get(id);
-            if (p.enforceAreas && areaSqm != null) {
-                List<long[]> tuples = allowedPairsForArea(
-                        areaSqm, p.cellMeters, minDim, maxDim,
-                        p.areaTolCells,
-                        (ro != null && ro.minAspect != null) ? ro.minAspect : p.minAspect,
-                        (ro != null && ro.maxAspect != null) ? ro.maxAspect : p.maxAspect
-                );
-                if (tuples.isEmpty()) {
-                    throw new IllegalStateException("Keine (w,h)-Paare für Raum " + id
-                            + " (Fläche/Aspekt/Toleranz/Dims prüfen).");
-                }
-                // Kompatibel mit älteren OR-Tools: TableConstraint + addTuple
-                TableConstraint tab = model.addAllowedAssignments(new IntVar[]{w[i], h[i]});
-                for (long[] t : tuples) tab.addTuple(t);
-            }
+			// Fläche (optional): Allowed (w,h)-Paare in Zellen mit Aspectfenster/Toleranz
+			Integer areaSqm = p.areaSqmByRoom.get(id);
+			////********04.09////*/**** Hier nur Parameter " p.areaTolCells" durch 0 ersetzt
+//			if (p.enforceAreas && areaSqm != null) {
+//				List<long[]> tuples = allowedPairsForArea(
+//						areaSqm, p.cellMeters, minDim, maxDim, /*p.areaTolCells*/0,
+//						(ro != null && ro.minAspect != null) ? ro.minAspect : p.minAspect,
+//						(ro != null && ro.maxAspect != null) ? ro.maxAspect : p.maxAspect);
+//				if (tuples.isEmpty()) {
+//					throw new IllegalStateException(
+//							"Keine (w,h)-Paare für Raum " + id + " (Fläche/Aspekt/Toleranz/Dims prüfen).");
+//				}
+//				// Kompatibel mit älteren OR-Tools: TableConstraint + addTuple
+//				TableConstraint tab = model.addAllowedAssignments(new IntVar[] { w[i], h[i] });
+//				for (long[] t : tuples)
+//					tab.addTuple(t);
+//			}
+			Edit edit = null;
+			boolean isEdited =
+				    (edit instanceof MoveLeftEdge    ml && ml.i == i) ||
+				    (edit instanceof MoveRightEdge   mr && mr.i == i) ||
+				    (edit instanceof MoveTopEdge     mt && mt.i == i) ||
+				    (edit instanceof MoveBottomEdge  mb && mb.i == i) ||
+				    (edit instanceof MoveVerticalSeam   mvs && (mvs.i==i || mvs.j==i)) ||
+				    (edit instanceof MoveHorizontalSeam mhs && (mhs.i==i || mhs.j==i));
 
-            // Quadratnähe für ausgewählte Räume: d = |w-h|
-            if (preferSquare.contains(id)) {
-                int maxDiff = Math.max(0, (ro != null && ro.maxDimCells != null ? ro.maxDimCells : p.maxDim)
-                                          - (ro != null && ro.minDimCells != null ? ro.minDimCells : p.minDim));
-                if (maxDiff == 0) maxDiff = p.maxDim - p.minDim;
-                IntVar d = model.newIntVar(0, Math.max(0, maxDiff), "sqdiff_" + id);
-                // d = |w - h|
-                model.addAbsEquality(d, LinearExpr.newBuilder().add(w[i]).addTerm(h[i], -1).build());
-                sqDiffs.add(d);
-            }
-        }
+				if (p.enforceAreas && areaSqm != null) {
+				    int tol = isEdited ? 0 : p.areaTolCells;   // bearbeiteter Raum: exakt
+				    var tuples = allowedPairsForArea(
+				    		areaSqm, p.cellMeters, minDim, maxDim, tol,
+				        (ro!=null && ro.minAspect!=null) ? ro.minAspect : p.minAspect,
+				        (ro!=null && ro.maxAspect!=null) ? ro.maxAspect : p.maxAspect
+				    );
+				    if (tuples.isEmpty()) return null;
+				    TableConstraint tab = model.addAllowedAssignments(new IntVar[]{ w[i], h[i] });
+				    for (long[] t : tuples) tab.addTuple(t);
+				}
 
-        // ---- Paarweise Constraints ----
-        for (int i = 0; i < n; i++) {
-            for (int j = i + 1; j < n; j++) {
-                String idI = G.nodes.get(i);
-                String idJ = G.nodes.get(j);
-                boolean neighbors = G.areNeighbors(idI, idJ);
+			// Quadratnähe für ausgewählte Räume: d = |w-h|
+			if (preferSquare.contains(id)) {
+				int maxDiff = Math.max(0, (ro != null && ro.maxDimCells != null ? ro.maxDimCells : p.maxDim)
+						- (ro != null && ro.minDimCells != null ? ro.minDimCells : p.minDim));
+				if (maxDiff == 0)
+					maxDiff = p.maxDim - p.minDim;
+				IntVar d = model.newIntVar(0, Math.max(0, maxDiff), "sqdiff_" + id);
+				// d = |w - h|
+				model.addAbsEquality(d, LinearExpr.newBuilder().add(w[i]).addTerm(h[i], -1).build());
+				sqDiffs.add(d);
+			}
+		}
 
-                // Basis: 4 Richtungs-Bools + reifizierte Trennung (bündig erlaubt)
-                BoolVar left  = model.newBoolVar("left_"  + i + "_" + j);
-                BoolVar right = model.newBoolVar("right_" + i + "_" + j);
-                BoolVar above = model.newBoolVar("above_" + i + "_" + j);
-                BoolVar below = model.newBoolVar("below_" + i + "_" + j);
+		// ---- Paarweise Constraints ----
+		for (int i = 0; i < n; i++) {
+			for (int j = i + 1; j < n; j++) {
+				String idI = G.nodes.get(i);
+				String idJ = G.nodes.get(j);
+				boolean neighbors = G.areNeighbors(idI, idJ);
 
-                // Mindestens eine Richtung aktiv
-                model.addBoolOr(new Literal[]{left, right, above, below});
+				// Basis: 4 Richtungs-Bools + reifizierte Trennung (bündig erlaubt)
+				BoolVar left = model.newBoolVar("left_" + i + "_" + j);
+				BoolVar right = model.newBoolVar("right_" + i + "_" + j);
+				BoolVar above = model.newBoolVar("above_" + i + "_" + j);
+				BoolVar below = model.newBoolVar("below_" + i + "_" + j);
 
-                // Reifizierte Trennungen (keine Big-Ms)
-                model.addLessOrEqual(LinearExpr.sum(new IntVar[]{x[i], w[i]}), x[j]).onlyEnforceIf(left);
-                model.addLessOrEqual(LinearExpr.sum(new IntVar[]{x[j], w[j]}), x[i]).onlyEnforceIf(right);
-                model.addLessOrEqual(LinearExpr.sum(new IntVar[]{y[i], h[i]}), y[j]).onlyEnforceIf(above);
-                model.addLessOrEqual(LinearExpr.sum(new IntVar[]{y[j], h[j]}), y[i]).onlyEnforceIf(below);
+				// Mindestens eine Richtung aktiv
+				model.addBoolOr(new Literal[] { left, right, above, below });
 
-                if (neighbors) {
-                    // --- Nachbarn: Adjazenz-Orientierung + bündig + Mindestkontakt ---
-                    BoolVar L = model.newBoolVar("L_" + i + "_" + j);
-                    BoolVar R = model.newBoolVar("R_" + i + "_" + j);
-                    BoolVar T = model.newBoolVar("T_" + i + "_" + j);
-                    BoolVar B = model.newBoolVar("B_" + i + "_" + j);
+				// Reifizierte Trennungen (keine Big-Ms)
+				model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), x[j]).onlyEnforceIf(left);
+				model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[j], w[j] }), x[i]).onlyEnforceIf(right);
+				model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), y[j]).onlyEnforceIf(above);
+				model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[j], h[j] }), y[i]).onlyEnforceIf(below);
 
-                    model.addBoolOr(new Literal[]{L, R, T, B});
-                    if (!p.adjAtLeastOneSide) {
-                        model.addAtMostOne(new Literal[]{L, R, T, B}); // zusammen mit BoolOr => genau 1
-                    }
+				if (neighbors) {
+					// --- Nachbarn: Adjazenz-Orientierung + bündig + Mindestkontakt ---
+					BoolVar L = model.newBoolVar("L_" + i + "_" + j);
+					BoolVar R = model.newBoolVar("R_" + i + "_" + j);
+					BoolVar T = model.newBoolVar("T_" + i + "_" + j);
+					BoolVar B = model.newBoolVar("B_" + i + "_" + j);
 
-                    // Kopplung sep-Bools <-> Orientierung
-                    model.addEquality(L, left);
-                    model.addEquality(R, right);
-                    model.addEquality(T, above);
-                    model.addEquality(B, below);
+					model.addBoolOr(new Literal[] { L, R, T, B });
+					if (!p.adjAtLeastOneSide) {
+						model.addAtMostOne(new Literal[] { L, R, T, B }); // zusammen mit BoolOr => genau 1
+					}
 
-                    // Bündig-Gleichheit
-                    model.addEquality(LinearExpr.sum(new IntVar[]{x[i], w[i]}), x[j]).onlyEnforceIf(L);
-                    model.addEquality(LinearExpr.sum(new IntVar[]{x[j], w[j]}), x[i]).onlyEnforceIf(R);
-                    model.addEquality(LinearExpr.sum(new IntVar[]{y[i], h[i]}), y[j]).onlyEnforceIf(T);
-                    model.addEquality(LinearExpr.sum(new IntVar[]{y[j], h[j]}), y[i]).onlyEnforceIf(B);
+					// Kopplung sep-Bools <-> Orientierung
+					model.addEquality(L, left);
+					model.addEquality(R, right);
+					model.addEquality(T, above);
+					model.addEquality(B, below);
 
-                    // Mindestkontakt (optional)
-                    int m = Math.max(0, p.minContactCells);
-                    if (m > 0) {
-                        IntVar ovY = model.newIntVar(0, hullHUse, "ovY_" + i + "_" + j);
-                        // ovY ≤ y_j + h_j - y_i  &  ovY ≤ y_i + h_i - y_j   (aktiv bei L/R)
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovY, y[i]}),
-                                LinearExpr.sum(new IntVar[]{y[j], h[j]})).onlyEnforceIf(L);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovY, y[j]}),
-                                LinearExpr.sum(new IntVar[]{y[i], h[i]})).onlyEnforceIf(L);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovY, y[i]}),
-                                LinearExpr.sum(new IntVar[]{y[j], h[j]})).onlyEnforceIf(R);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovY, y[j]}),
-                                LinearExpr.sum(new IntVar[]{y[i], h[i]})).onlyEnforceIf(R);
-                        model.addGreaterOrEqual(ovY, m).onlyEnforceIf(L);
-                        model.addGreaterOrEqual(ovY, m).onlyEnforceIf(R);
+					// Bündig-Gleichheit
+					model.addEquality(LinearExpr.sum(new IntVar[] { x[i], w[i] }), x[j]).onlyEnforceIf(L);
+					model.addEquality(LinearExpr.sum(new IntVar[] { x[j], w[j] }), x[i]).onlyEnforceIf(R);
+					model.addEquality(LinearExpr.sum(new IntVar[] { y[i], h[i] }), y[j]).onlyEnforceIf(T);
+					model.addEquality(LinearExpr.sum(new IntVar[] { y[j], h[j] }), y[i]).onlyEnforceIf(B);
 
-                        IntVar ovX = model.newIntVar(0, hullWUse, "ovX_" + i + "_" + j);
-                        // ovX ≤ x_j + w_j - x_i  &  ovX ≤ x_i + w_i - x_j   (aktiv bei T/B)
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovX, x[i]}),
-                                LinearExpr.sum(new IntVar[]{x[j], w[j]})).onlyEnforceIf(T);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovX, x[j]}),
-                                LinearExpr.sum(new IntVar[]{x[i], w[i]})).onlyEnforceIf(T);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovX, x[i]}),
-                                LinearExpr.sum(new IntVar[]{x[j], w[j]})).onlyEnforceIf(B);
-                        model.addLessOrEqual(LinearExpr.sum(new IntVar[]{ovX, x[j]}),
-                                LinearExpr.sum(new IntVar[]{x[i], w[i]})).onlyEnforceIf(B);
-                        model.addGreaterOrEqual(ovX, m).onlyEnforceIf(T);
-                        model.addGreaterOrEqual(ovX, m).onlyEnforceIf(B);
-                    }
+					// Mindestkontakt (optional)
+					int m = Math.max(0, p.minContactCells);
+					if (m > 0) {
+						IntVar ovY = model.newIntVar(0, hullHUse, "ovY_" + i + "_" + j);
+						// ovY ≤ y_j + h_j - y_i & ovY ≤ y_i + h_i - y_j (aktiv bei L/R)
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovY, y[i] }),
+								LinearExpr.sum(new IntVar[] { y[j], h[j] })).onlyEnforceIf(L);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovY, y[j] }),
+								LinearExpr.sum(new IntVar[] { y[i], h[i] })).onlyEnforceIf(L);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovY, y[i] }),
+								LinearExpr.sum(new IntVar[] { y[j], h[j] })).onlyEnforceIf(R);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovY, y[j] }),
+								LinearExpr.sum(new IntVar[] { y[i], h[i] })).onlyEnforceIf(R);
+						model.addGreaterOrEqual(ovY, m).onlyEnforceIf(L);
+						model.addGreaterOrEqual(ovY, m).onlyEnforceIf(R);
 
-                } else {
-                    // --- Nicht-Nachbarn ---
-                    if (p.forbidUnwantedContacts) {
-                        // Aggregatoren H = (left ∨ right), V = (above ∨ below)
-                        BoolVar H = model.newBoolVar("H_" + i + "_" + j);
-                        BoolVar V = model.newBoolVar("V_" + i + "_" + j);
-                        model.addBoolOr(new Literal[]{left, right, H.not()});
-                        model.addImplication(left, H);
-                        model.addImplication(right, H);
-                        model.addBoolOr(new Literal[]{above, below, V.not()});
-                        model.addImplication(above, V);
-                        model.addImplication(below, V);
+						IntVar ovX = model.newIntVar(0, hullWUse, "ovX_" + i + "_" + j);
+						// ovX ≤ x_j + w_j - x_i & ovX ≤ x_i + w_i - x_j (aktiv bei T/B)
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovX, x[i] }),
+								LinearExpr.sum(new IntVar[] { x[j], w[j] })).onlyEnforceIf(T);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovX, x[j] }),
+								LinearExpr.sum(new IntVar[] { x[i], w[i] })).onlyEnforceIf(T);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovX, x[i] }),
+								LinearExpr.sum(new IntVar[] { x[j], w[j] })).onlyEnforceIf(B);
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { ovX, x[j] }),
+								LinearExpr.sum(new IntVar[] { x[i], w[i] })).onlyEnforceIf(B);
+						model.addGreaterOrEqual(ovX, m).onlyEnforceIf(T);
+						model.addGreaterOrEqual(ovX, m).onlyEnforceIf(B);
+					}
 
-                        // Wenn nur horizontal getrennt (H=1 & V=0): mind. 1 Zelle horizontaler Abstand
-                        model.addLessOrEqual(
-                                LinearExpr.sum(new IntVar[]{x[i], w[i]}),
-                                LinearExpr.newBuilder().add(x[j]).add(-1).build()
-                        ).onlyEnforceIf(new Literal[]{left, V.not()});
-                        model.addLessOrEqual(
-                                LinearExpr.sum(new IntVar[]{x[j], w[j]}),
-                                LinearExpr.newBuilder().add(x[i]).add(-1).build()
-                        ).onlyEnforceIf(new Literal[]{right, V.not()});
+				} else {
+					// --- Nicht-Nachbarn ---
+					if (p.forbidUnwantedContacts) {
+						// Aggregatoren H = (left ∨ right), V = (above ∨ below)
+						BoolVar H = model.newBoolVar("H_" + i + "_" + j);
+						BoolVar V = model.newBoolVar("V_" + i + "_" + j);
+						model.addBoolOr(new Literal[] { left, right, H.not() });
+						model.addImplication(left, H);
+						model.addImplication(right, H);
+						model.addBoolOr(new Literal[] { above, below, V.not() });
+						model.addImplication(above, V);
+						model.addImplication(below, V);
 
-                        // Wenn nur vertikal getrennt (V=1 & H=0): mind. 1 Zelle vertikaler Abstand
-                        model.addLessOrEqual(
-                                LinearExpr.sum(new IntVar[]{y[i], h[i]}),
-                                LinearExpr.newBuilder().add(y[j]).add(-1).build()
-                        ).onlyEnforceIf(new Literal[]{above, H.not()});
-                        model.addLessOrEqual(
-                                LinearExpr.sum(new IntVar[]{y[j], h[j]}),
-                                LinearExpr.newBuilder().add(y[i]).add(-1).build()
-                        ).onlyEnforceIf(new Literal[]{below, H.not()});
-                    }
-                    // sonst: nur Basis-Trennung (bündig erlaubt)
-                }
-            }
-        }
+						// Wenn nur horizontal getrennt (H=1 & V=0): mind. 1 Zelle horizontaler Abstand
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }),
+								LinearExpr.newBuilder().add(x[j]).add(-1).build())
+								.onlyEnforceIf(new Literal[] { left, V.not() });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[j], w[j] }),
+								LinearExpr.newBuilder().add(x[i]).add(-1).build())
+								.onlyEnforceIf(new Literal[] { right, V.not() });
 
-        // ---- Bounding-Box (rechts/oben) ----
-        IntVar maxX = model.newIntVar(0, hullW, "maxX");
-        IntVar maxY = model.newIntVar(0, hullH, "maxY");
-        for (int i = 0; i < n; i++) {
-            model.addLessOrEqual(LinearExpr.sum(new IntVar[]{x[i], w[i]}), maxX);
-            model.addLessOrEqual(LinearExpr.sum(new IntVar[]{y[i], h[i]}), maxY);
-        }
-        if (p.forceFillHull) {
-            model.addEquality(maxX, hullW - border);
-            model.addEquality(maxY, hullH - border);
-        }
+						// Wenn nur vertikal getrennt (V=1 & H=0): mind. 1 Zelle vertikaler Abstand
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }),
+								LinearExpr.newBuilder().add(y[j]).add(-1).build())
+								.onlyEnforceIf(new Literal[] { above, H.not() });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[j], h[j] }),
+								LinearExpr.newBuilder().add(y[i]).add(-1).build())
+								.onlyEnforceIf(new Literal[] { below, H.not() });
+					}
+					// sonst: nur Basis-Trennung (bündig erlaubt)
+				}
+			}
+		}
 
-        // ---- Gewichtete Zielfunktion ----
+		// ---- Bounding-Box (rechts/oben) ----
+		IntVar maxX = model.newIntVar(0, hullW, "maxX");
+		IntVar maxY = model.newIntVar(0, hullH, "maxY");
+		for (int i = 0; i < n; i++) {
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), maxX);
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), maxY);
+		}
+		if (p.forceFillHull) {
+			model.addEquality(maxX, hullW - border);
+			model.addEquality(maxY, hullH - border);
+		}
+
+		// ---- Gewichtete Zielfunktion ----
 //        LinearExpr.Builder obj = LinearExpr.newBuilder();
 //        obj.addTerm(maxX, W_PRIMARY);
 //        obj.addTerm(maxY, W_PRIMARY);
 //        for (IntVar d : sqDiffs) obj.addTerm(d, W_SQUARE);
 //        model.minimize(obj.build());
-        List<LinearArgument> terms = new ArrayList<>();
-        terms.add(LinearExpr.term(maxX, W_PRIMARY));
-        terms.add(LinearExpr.term(maxY, W_PRIMARY));
-        for (IntVar d : sqDiffs) terms.add(LinearExpr.term(d, W_SQUARE));
-        model.minimize(LinearExpr.sum(terms.toArray(new LinearArgument[0])));
+		List<LinearArgument> terms = new ArrayList<>();
+		terms.add(LinearExpr.term(maxX, W_PRIMARY));
+		terms.add(LinearExpr.term(maxY, W_PRIMARY));
+		for (IntVar d : sqDiffs)
+			terms.add(LinearExpr.term(d, W_SQUARE));
+		model.minimize(LinearExpr.sum(terms.toArray(new LinearArgument[0])));
 
-        // ---- Lösen ----
-        CpSolver solver = new CpSolver();
-        // Beispiel-Parameter:
-        // solver.getParameters().setMaxTimeInSeconds(30.0);
-        // solver.getParameters().setNumSearchWorkers(Math.max(1, Runtime.getRuntime().availableProcessors()-1));
-        CpSolverStatus st = solver.solve(model);
-        if (!(st == CpSolverStatus.OPTIMAL || st == CpSolverStatus.FEASIBLE)) {
-            System.out.println("Keine feasible Lösung gefunden – Status: " + st);
-            return List.of();
-        }
+		// ---- Lösen ----
+		CpSolver solver = new CpSolver();
+		// Beispiel-Parameter:
+		// solver.getParameters().setMaxTimeInSeconds(30.0);
+		// solver.getParameters().setNumSearchWorkers(Math.max(1,
+		// Runtime.getRuntime().availableProcessors()-1));
+		CpSolverStatus st = solver.solve(model);
+		if (!(st == CpSolverStatus.OPTIMAL || st == CpSolverStatus.FEASIBLE)) {
+			System.out.println("Keine feasible Lösung gefunden – Status: " + st);
+			return List.of();
+		}
 
-        // ---- Lösung extrahieren ----
-        Solution sol = new Solution();
-        sol.maxX = (int) solver.value(maxX);
-        sol.maxY = (int) solver.value(maxY);
+		// ---- Lösung extrahieren ----
+		Solution sol = new Solution();
+		sol.maxX = (int) solver.value(maxX);
+		sol.maxY = (int) solver.value(maxY);
 
-        for (int i = 0; i < n; i++) {
-            RoomPieces rp = new RoomPieces();
-            rp.x0 = (int) solver.value(x[i]);
-            rp.y0 = (int) solver.value(y[i]);
-            int wi = (int) solver.value(w[i]);
-            int hi = (int) solver.value(h[i]);
-            rp.wH = rp.tX = wi;
-            rp.tY = rp.hV = hi;
-            rp.wBB = wi;
-            rp.hBB = hi;
-            sol.piecesByNode.put(G.nodes.get(i), rp);
-        }
+		for (int i = 0; i < n; i++) {
+			RoomPieces rp = new RoomPieces();
+			rp.x0 = (int) solver.value(x[i]);
+			rp.y0 = (int) solver.value(y[i]);
+			int wi = (int) solver.value(w[i]);
+			int hi = (int) solver.value(h[i]);
+			rp.wH = rp.tX = wi;
+			rp.tY = rp.hV = hi;
+			rp.wBB = wi;
+			rp.hBB = hi;
+			sol.piecesByNode.put(G.nodes.get(i), rp);
+		}
 
-        return List.of(sol);
-    }
+		return List.of(sol);
+	}
 
-    /** Erlaubte (w,h)-Paare in Zellen für eine Ziel-Fläche in m² inkl. Toleranz und Aspect-Fenster. */
-    static List<long[]> allowedPairsForArea(int areaSqm,
-                                            double cellM,
-                                            int minDim, int maxDim,
-                                            int tolCells,
-                                            double minAsp, double maxAsp) {
-        if (areaSqm < 0 || cellM <= 0) throw new IllegalArgumentException("Ungültige Flächenparameter");
-        if (tolCells < 0) throw new IllegalArgumentException("tolCells < 0");
-        if (minDim > maxDim) throw new IllegalArgumentException("minDim > maxDim");
-        if (minAsp > maxAsp) throw new IllegalArgumentException("minAsp > maxAsp");
+	/**
+	 * Erlaubte (w,h)-Paare in Zellen für eine Ziel-Fläche in m² inkl. Toleranz und
+	 * Aspect-Fenster.
+	 */
+	static List<long[]> allowedPairsForArea(int areaSqm, double cellM, int minDim, int maxDim, int tolCells,
+			double minAsp, double maxAsp) {
+		if (areaSqm < 0 || cellM <= 0)
+			throw new IllegalArgumentException("Ungültige Flächenparameter");
+		if (tolCells < 0)
+			throw new IllegalArgumentException("tolCells < 0");
+		if (minDim > maxDim)
+			throw new IllegalArgumentException("minDim > maxDim");
+		if (minAsp > maxAsp)
+			throw new IllegalArgumentException("minAsp > maxAsp");
 
-        int target = (int) Math.round(areaSqm / (cellM * cellM)); // Zielzellen
-        List<long[]> tuples = new ArrayList<>();
-        for (int W = minDim; W <= maxDim; W++) {
-            for (int H = minDim; H <= maxDim; H++) {
-                int cells = W * H;
-                if (Math.abs(cells - target) <= tolCells) {
-                    double ar = (double) W / H;
-                    if (ar >= minAsp && ar <= maxAsp) {
-                        tuples.add(new long[]{W, H});
-                    }
-                }
-            }
-        }
-        return tuples;
-    }
+		int target = (int) Math.round(areaSqm / (cellM * cellM)); // Zielzellen
+		List<long[]> tuples = new ArrayList<>();
+		for (int W = minDim; W <= maxDim; W++) {
+			for (int H = minDim; H <= maxDim; H++) {
+				int cells = W * H;
+				if (Math.abs(cells - target) <= tolCells) {
+					double ar = (double) W / H;
+					if (ar >= minAsp && ar <= maxAsp) {
+						tuples.add(new long[] { W, H });
+					}
+				}
+			}
+		}
+		return tuples;
+	}
+
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	//// ***********************/////04.09/////*********************************/////////////////////////////////
+	// Orientierung zwischen i und j (i liegt Links/Rechts/Top/Bottom von j)
+	static enum Ori {
+		L, R, T, B
+	}
+
+	// Key-Helfer für Paar (i,j) mit i<j
+	static long pairKey(int i, int j) {
+		return (((long) i) << 32) | (j & 0xffffffffL);
+	}
+
+	// Edit-“Typen”
+	static abstract class Edit {
+		final int i, j;
+
+		Edit(int i, int j) {
+			this.i = i;
+			this.j = j;
+		}
+	}
+
+	static final class MoveVerticalSeam extends Edit {
+		final int newX;
+
+		MoveVerticalSeam(int i, int j, int newX) {
+			super(i, j);
+			this.newX = newX;
+		}
+		
+	
+
+	}
+
+	static final class MoveHorizontalSeam extends Edit {
+		final int newY;
+
+		MoveHorizontalSeam(int i, int j, int newY) {
+			super(i, j);
+			this.newY = newY;
+		}
+	}
+
+	// Topologie aus einer gefundenen Lösung ableiten
+	static Map<Long, Ori> inferTopology(Solution sol, List<String> nodes) {
+		Map<Long, Ori> topo = new HashMap<>();
+		for (int i = 0; i < nodes.size(); i++) {
+			var ri = sol.piecesByNode.get(nodes.get(i));
+			int xi = ri.x0, yi = ri.y0, wi = ri.wH, hi = ri.hV;
+			for (int j = i + 1; j < nodes.size(); j++) {
+				var rj = sol.piecesByNode.get(nodes.get(j));
+				int xj = rj.x0, yj = rj.y0, wj = rj.wH, hj = rj.hV;
+
+				if (xi + wi == xj)
+					topo.put(pairKey(i, j), Ori.L);
+				else if (xj + wj == xi)
+					topo.put(pairKey(i, j), Ori.R);
+				else if (yi + hi == yj)
+					topo.put(pairKey(i, j), Ori.T);
+				else if (yj + hj == yi)
+					topo.put(pairKey(i, j), Ori.B);
+				else {
+					// Nicht-Nachbarn: aktuelle Trennrichtung merken
+					if (xi + wi <= xj)
+						topo.put(pairKey(i, j), Ori.L);
+					else if (xj + wj <= xi)
+						topo.put(pairKey(i, j), Ori.R);
+					else if (yi + hi <= yj)
+						topo.put(pairKey(i, j), Ori.T);
+					else if (yj + hj <= yi)
+						topo.put(pairKey(i, j), Ori.B);
+				}
+			}
+		}
+		return topo;
+	}
+
+	static FloorplanCrossModalSolver.Solution localEditSolve(CrossModalMapper.MappedParams p,
+			FloorplanCrossModalSolver.Solution base, Map<Long, Ori> topo, // wird nur für Overlays verwendet, hier nicht
+																			// zum Fixieren
+			Edit edit) {
+		com.google.ortools.Loader.loadNativeLibraries();
+
+		var G = p.G;
+		int n = G.nodes.size();
+		int border = Math.max(0, p.borderCells);
+		int hullW = p.hullWCells, hullH = p.hullHCells;
+
+		CpModel model = new CpModel();
+
+		// Vars
+		IntVar[] x = new IntVar[n], y = new IntVar[n], w = new IntVar[n], h = new IntVar[n];
+
+		// Für Ziel: Summe der Änderungen zur Basislösung (L1)
+		List<LinearArgument> deltas = new ArrayList<>();
+
+		// Für Nachbarn: wir brauchen Zugriff auf die Orientierungs-Bools pro Paar
+		// key -> [L,R,T,B]
+		Map<Long, BoolVar[]> ORI = new HashMap<>();
+
+		// Grund-Variablen & Hülle & Fläche
+		for (int i = 0; i < n; i++) {
+			String id = G.nodes.get(i);
+			var ro = p.perRoomOptions.get(id);
+			int minDim = ro != null && ro.minDimCells != null ? ro.minDimCells : p.minDim;
+			int maxDim = ro != null && ro.maxDimCells != null ? ro.maxDimCells : p.maxDim;
+
+			x[i] = model.newIntVar(border, hullW - border, "x_" + i);
+			y[i] = model.newIntVar(border, hullH - border, "y_" + i);
+			w[i] = model.newIntVar(minDim, maxDim, "w_" + i);
+			h[i] = model.newIntVar(minDim, maxDim, "h_" + i);
+
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), hullW - border);
+			model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), hullH - border);
+
+			Integer sqm = p.areaSqmByRoom.get(id);
+			if (p.enforceAreas && sqm != null) {
+				var tuples = allowedPairsForArea(sqm, p.cellMeters, minDim, maxDim, p.areaTolCells,
+						(ro != null && ro.minAspect != null) ? ro.minAspect : p.minAspect,
+						(ro != null && ro.maxAspect != null) ? ro.maxAspect : p.maxAspect);
+				if (tuples.isEmpty())
+					return null;
+				TableConstraint tab = model.addAllowedAssignments(new IntVar[] { w[i], h[i] });
+				for (long[] t : tuples)
+					tab.addTuple(t);
+			}
+
+			// L1-Abstand zur Basis
+			var bi = base.piecesByNode.get(id);
+			IntVar dx = model.newIntVar(0, hullW, "dx_" + i);
+			IntVar dy = model.newIntVar(0, hullH, "dy_" + i);
+			IntVar dw = model.newIntVar(0, hullW, "dw_" + i);
+			IntVar dh = model.newIntVar(0, hullH, "dh_" + i);
+			model.addAbsEquality(dx, LinearExpr.sum(new LinearArgument[] { x[i], LinearExpr.constant(-bi.x0) }));
+			model.addAbsEquality(dy, LinearExpr.sum(new LinearArgument[] { y[i], LinearExpr.constant(-bi.y0) }));
+			model.addAbsEquality(dw, LinearExpr.sum(new LinearArgument[] { w[i], LinearExpr.constant(-bi.wH) }));
+			model.addAbsEquality(dh, LinearExpr.sum(new LinearArgument[] { h[i], LinearExpr.constant(-bi.hV) }));
+			deltas.add(dx);
+			deltas.add(dy);
+			deltas.add(dw);
+			deltas.add(dh);
+		}
+
+		// Paarweise Constraints
+		for (int i = 0; i < n; i++)
+			for (int j = i + 1; j < n; j++) {
+				long key = (((long) i) << 32) | (j & 0xffffffffL);
+				boolean neighbors = G.areNeighbors(G.nodes.get(i), G.nodes.get(j));
+
+				if (neighbors) {
+					// --- Nachbarn: Orientierung frei (L,R,T,B) aber Adjazenz MUSS bestehen ---
+					BoolVar L = model.newBoolVar("L_" + i + "_" + j);
+					BoolVar R = model.newBoolVar("R_" + i + "_" + j);
+					BoolVar T = model.newBoolVar("T_" + i + "_" + j);
+					BoolVar B = model.newBoolVar("B_" + i + "_" + j);
+					ORI.put(key, new BoolVar[] { L, R, T, B });
+
+					// mindestens eine Orientierung
+					model.addBoolOr(new Literal[] { L, R, T, B });
+
+					int m = Math.max(0, p.minContactCells);
+
+					// L: x_i + w_i = x_j & Y-Überlapp mit ovY >= m
+					model.addEquality(LinearExpr.sum(new IntVar[] { x[i], w[i] }), x[j]).onlyEnforceIf(L);
+					if (m > 0) {
+						IntVar ovY = model.newIntVar(0, hullH, "ovY_" + i + "_" + j + "_L");
+						model.addLessOrEqual(ovY,
+								LinearExpr.sum(new LinearArgument[] { y[j], h[j], LinearExpr.term(y[i], -1) }))
+								.onlyEnforceIf(L);
+						model.addLessOrEqual(ovY,
+								LinearExpr.sum(new LinearArgument[] { y[i], h[i], LinearExpr.term(y[j], -1) }))
+								.onlyEnforceIf(L);
+						model.addGreaterOrEqual(ovY, m).onlyEnforceIf(L);
+					}
+
+					// R: x_j + w_j = x_i & Y-Überlapp
+					model.addEquality(LinearExpr.sum(new IntVar[] { x[j], w[j] }), x[i]).onlyEnforceIf(R);
+					if (m > 0) {
+						IntVar ovY = model.newIntVar(0, hullH, "ovY_" + i + "_" + j + "_R");
+						model.addLessOrEqual(ovY,
+								LinearExpr.sum(new LinearArgument[] { y[j], h[j], LinearExpr.term(y[i], -1) }))
+								.onlyEnforceIf(R);
+						model.addLessOrEqual(ovY,
+								LinearExpr.sum(new LinearArgument[] { y[i], h[i], LinearExpr.term(y[j], -1) }))
+								.onlyEnforceIf(R);
+						model.addGreaterOrEqual(ovY, m).onlyEnforceIf(R);
+					}
+
+					// T: y_i + h_i = y_j & X-Überlapp
+					model.addEquality(LinearExpr.sum(new IntVar[] { y[i], h[i] }), y[j]).onlyEnforceIf(T);
+					if (m > 0) {
+						IntVar ovX = model.newIntVar(0, hullW, "ovX_" + i + "_" + j + "_T");
+						model.addLessOrEqual(ovX,
+								LinearExpr.sum(new LinearArgument[] { x[j], w[j], LinearExpr.term(x[i], -1) }))
+								.onlyEnforceIf(T);
+						model.addLessOrEqual(ovX,
+								LinearExpr.sum(new LinearArgument[] { x[i], w[i], LinearExpr.term(x[j], -1) }))
+								.onlyEnforceIf(T);
+						model.addGreaterOrEqual(ovX, m).onlyEnforceIf(T);
+					}
+
+					// B: y_j + h_j = y_i & X-Überlapp
+					model.addEquality(LinearExpr.sum(new IntVar[] { y[j], h[j] }), y[i]).onlyEnforceIf(B);
+					if (m > 0) {
+						IntVar ovX = model.newIntVar(0, hullW, "ovX_" + i + "_" + j + "_B");
+						model.addLessOrEqual(ovX,
+								LinearExpr.sum(new LinearArgument[] { x[j], w[j], LinearExpr.term(x[i], -1) }))
+								.onlyEnforceIf(B);
+						model.addLessOrEqual(ovX,
+								LinearExpr.sum(new LinearArgument[] { x[i], w[i], LinearExpr.term(x[j], -1) }))
+								.onlyEnforceIf(B);
+						model.addGreaterOrEqual(ovX, m).onlyEnforceIf(B);
+					}
+
+				} else {
+					// --- Nicht-Nachbarn: No-Overlap; optional "keine Kante" ---
+					BoolVar left = model.newBoolVar("left_" + i + "_" + j);
+					BoolVar right = model.newBoolVar("right_" + i + "_" + j);
+					BoolVar above = model.newBoolVar("above_" + i + "_" + j);
+					BoolVar below = model.newBoolVar("below_" + i + "_" + j);
+
+					model.addBoolOr(new Literal[] { left, right, above, below });
+
+					model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), x[j]).onlyEnforceIf(left);
+					model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[j], w[j] }), x[i]).onlyEnforceIf(right);
+					model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), y[j]).onlyEnforceIf(above);
+					model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[j], h[j] }), y[i]).onlyEnforceIf(below);
+
+					if (p.forbidUnwantedContacts) {
+						// keine gemeinsame Kante: 1-Zellen-Gap, wenn nur eine Achse trennt
+						// (H = left∨right), (V = above∨below)
+						BoolVar H = model.newBoolVar("H_" + i + "_" + j);
+						BoolVar V = model.newBoolVar("V_" + i + "_" + j);
+						model.addBoolOr(new Literal[] { left, right, H.not() });
+						model.addImplication(left, H);
+						model.addImplication(right, H);
+						model.addBoolOr(new Literal[] { above, below, V.not() });
+						model.addImplication(above, V);
+						model.addImplication(below, V);
+
+						// Horizontaler Gap, wenn nur H trennt
+						LinearExpr xjMinus1 = LinearExpr.sum(new LinearArgument[] { x[j], LinearExpr.constant(-1) });
+						LinearExpr xiMinus1 = LinearExpr.sum(new LinearArgument[] { x[i], LinearExpr.constant(-1) });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[i], w[i] }), xjMinus1)
+								.onlyEnforceIf(new Literal[] { left, V.not() });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { x[j], w[j] }), xiMinus1)
+								.onlyEnforceIf(new Literal[] { right, V.not() });
+
+						// Vertikaler Gap, wenn nur V trennt
+						LinearExpr yjMinus1 = LinearExpr.sum(new LinearArgument[] { y[j], LinearExpr.constant(-1) });
+						LinearExpr yiMinus1 = LinearExpr.sum(new LinearArgument[] { y[i], LinearExpr.constant(-1) });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[i], h[i] }), yjMinus1)
+								.onlyEnforceIf(new Literal[] { above, H.not() });
+						model.addLessOrEqual(LinearExpr.sum(new IntVar[] { y[j], h[j] }), yiMinus1)
+								.onlyEnforceIf(new Literal[] { below, H.not() });
+					}
+				}
+			}
+
+		// --- Edit festklemmen (nur die gezogene Kante spezialisieren) ---
+		if (edit instanceof MoveVerticalSeam mv) {
+			int i = mv.i, j = mv.j, S = mv.newX;
+			long key = (((long) i) << 32) | (j & 0xffffffffL);
+			BoolVar[] o = ORI.get(key);
+			if (o == null)
+				return null; // sollte bei Nachbarn nie passieren
+			BoolVar L = o[0], R = o[1], T = o[2], B = o[3];
+
+			// Nur vertikale Adjazenz erlaubt und genau eine davon
+			model.addEquality(T, 0);
+			model.addEquality(B, 0);
+			model.addBoolOr(new Literal[] { L, R });
+			model.addAtMostOne(new Literal[] { L, R });
+
+			// Kantenposition reifiziert an L/R
+			model.addEquality(LinearExpr.sum(new IntVar[] { x[i], w[i] }), S).onlyEnforceIf(L);
+			model.addEquality(x[j], S).onlyEnforceIf(L);
+
+			model.addEquality(LinearExpr.sum(new IntVar[] { x[j], w[j] }), S).onlyEnforceIf(R);
+			model.addEquality(x[i], S).onlyEnforceIf(R);
+		}
+		if (edit instanceof MoveHorizontalSeam mh) {
+			int i = mh.i, j = mh.j, T = mh.newY;
+			long key = (((long) i) << 32) | (j & 0xffffffffL);
+			BoolVar[] o = ORI.get(key);
+			if (o == null)
+				return null;
+			BoolVar L = o[0], R = o[1], TT = o[2], B = o[3];
+
+			// Nur horizontale Adjazenz erlaubt und genau eine davon
+			model.addEquality(L, 0);
+			model.addEquality(R, 0);
+			model.addBoolOr(new Literal[] { TT, B });
+			model.addAtMostOne(new Literal[] { TT, B });
+
+			// Kantenposition reifiziert an T/B
+			model.addEquality(LinearExpr.sum(new IntVar[] { y[i], h[i] }), T).onlyEnforceIf(TT);
+			model.addEquality(y[j], T).onlyEnforceIf(TT);
+
+			model.addEquality(LinearExpr.sum(new IntVar[] { y[j], h[j] }), T).onlyEnforceIf(B);
+			model.addEquality(y[i], T).onlyEnforceIf(B);
+		}
+///////***////*******************///04.09///*****************///////
+		///////***////*******************///04.09///*****************///////
+		///////***////*******************///04.09///*****************///////
+		///////***////*******************///04.09///*****************///////
+		///////***////*******************///04.09///*****************///////
+		
+		// --- Einzelkanten bewegen (Raum i) ---
+		if (edit instanceof MoveLeftEdge me) {
+		    int i = me.i; int S = me.newX;
+		    model.addEquality(x[i], S);
+		}
+		if (edit instanceof MoveRightEdge me) {
+		    int i = me.i; int S = me.newX;
+		    model.addEquality(LinearExpr.sum(new IntVar[]{x[i], w[i]}), S);
+		}
+		if (edit instanceof MoveTopEdge me) {
+		    int i = me.i; int T = me.newY;
+		    model.addEquality(y[i], T);
+		}
+		if (edit instanceof MoveBottomEdge me) {
+		    int i = me.i; int T = me.newY;
+		    model.addEquality(LinearExpr.sum(new IntVar[]{y[i], h[i]}), T);
+		}
+
+		
+
+	///////***////*******************///04.09///*****************///////
+			///////***////*******************///04.09///*****************///////
+			///////***////*******************///04.09///*****************///////
+			///////***////*******************///04.09///*****************///////
+			///////***////*******************///04.09///*****************///////
+		
+		
+		
+		// Ziel: minimale Gesamtänderung zur Basis
+		model.minimize(LinearExpr.sum(deltas.toArray(new LinearArgument[0])));
+
+		// Solve kurz & knackig
+		CpSolver solver = new CpSolver();
+		solver.getParameters().setMaxTimeInSeconds(0.3);
+		CpSolverStatus st = solver.solve(model);
+		if (st != CpSolverStatus.OPTIMAL && st != CpSolverStatus.FEASIBLE)
+			return null;
+
+		// Lösung zurück
+		var out = new FloorplanCrossModalSolver.Solution();
+		for (int i = 0; i < n; i++) {
+			var rp = new FloorplanCrossModalSolver.RoomPieces();
+			rp.x0 = (int) solver.value(x[i]);
+			rp.y0 = (int) solver.value(y[i]);
+			int wi = (int) solver.value(w[i]);
+			int hi = (int) solver.value(h[i]);
+			rp.wH = rp.tX = wi;
+			rp.tY = rp.hV = hi;
+			rp.wBB = wi;
+			rp.hBB = hi;
+			out.piecesByNode.put(G.nodes.get(i), rp);
+		}
+		out.maxX = out.piecesByNode.values().stream().mapToInt(r -> r.x0 + r.wH).max().orElse(0);
+		out.maxY = out.piecesByNode.values().stream().mapToInt(r -> r.y0 + r.hV).max().orElse(0);
+		return out;
+	}
+
+///*************************************///////////////////04.09.//*****************
+	/// *************************************///////////////////04.09.//*****************
+	/// *************************************///////////////////04.09.//*****************
+	static final class MoveLeftEdge extends Edit {
+		final int newX;
+
+		MoveLeftEdge(int i, int newX) {
+			super(i, -1);
+			this.newX = newX;
+		}
+	}
+
+	static final class MoveRightEdge extends Edit {
+		final int newX;
+
+		MoveRightEdge(int i, int newX) {
+			super(i, -1);
+			this.newX = newX;
+		}
+	}
+
+	static final class MoveTopEdge extends Edit {
+		final int newY;
+
+		MoveTopEdge(int i, int newY) {
+			super(i, -1);
+			this.newY = newY;
+		}
+	}
+
+	static final class MoveBottomEdge extends Edit {
+		final int newY;
+
+		MoveBottomEdge(int i, int newY) {
+			super(i, -1);
+			this.newY = newY;
+		}
+	}
+
 }
